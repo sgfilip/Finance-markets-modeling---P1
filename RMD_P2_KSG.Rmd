@@ -1,0 +1,314 @@
+---
+title: "Modelowanie Rynków Finansowych - Transakcyjne i cenowe czasy trwania"
+author: "Filip Sass-Gustkiewicz"
+output: html_document
+date: "10.12.2022"
+---
+
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(ACDm)
+
+get_time <- function(time) {
+  time %>%
+    str_split(" ") %>%
+    map_chr(2) %>%
+    hms()
+}
+
+hms.to.char <- function(y)
+{
+  d <- NA
+  for(x in y)
+  {
+    b <- hours((x%/%3600)) + minutes((x%%3600)%/%60)
+    a <- as.character(b) %>% str_split(" ")
+    a <- str_sub(a[[1]], 1, str_length(a[[1]])-1)[-3]
+    a[1] <- ifelse(str_length(a)[1] == 1, paste0("0", a[1]), a[1])
+    a[2] <- ifelse(str_length(a)[2] == 1, paste0("0", a[2]), a[2])
+    a <- paste0(a[1], ":", a[2])
+    d <- c(d, a)
+  }
+  d <- d[-1]
+  return(d)
+}
+
+
+pr.change <- function(df.input, change = 0.1)
+{
+  df <- df.input
+  for(i in 2:nrow(df))
+  {
+    xd <- df$cena
+    
+    if(i == 1)
+    {
+      inx <- which(abs(xd - xd[i]) >= change)[1]
+    }
+    else
+    {
+      xd[c(1:(i - 1))] <- NA
+      inx <- which(abs(xd - xd[i]) >= change)[1]
+    }
+    time.difference <- as.numeric(difftime(df$czas[inx] , df$czas[i], units = "secs"))
+    if(((time.difference/3600) > 8) | (is.na(inx)))
+      df[i, 8] <- NA
+    else
+      df[i, 8] <- time.difference
+    
+  }
+  return(df)
+}
+
+pr.change <- function(df.input, change){
+  df <- df.input
+  c = df[1,]
+  for(i in 2:nrow(df))
+  {
+    if (abs(c$cena[nrow(c),1]-df$cena[i,1])>change){
+      c = rbind(c,df[i,])
+    }
+  }  
+  return(c)
+}
+
+pr.change.time <- function(df.input){
+  df <- df.input
+  for (i in 2:nrow(df)){
+    df$pr.change[i-1] = as.numeric(difftime(df$czas[i],df$czas[i-1], units = "secs"))
+  }
+  for (i in 1:nrow(df)){
+    if (i >= nrow(df)) {
+      break
+    }
+    if(df$pr.change[i] > 3600*8){
+      df <- df[-i,]
+    }
+  }
+  return(df)
+}
+```
+
+## Część 1: Transakcyjne czasy trwania
+
+### Formowanie szeregu czasowego
+
+W pierwszym etapie projektu wybrano 2 spółki wchodzące w okresie od 4 stycznia do 15 lutego 2016 roku w skład indeksu WIG20. Spośród wszystkich firm zdecydowano się na przeprowadzenie badań dla spółek Lotos oraz Asseco. Transakcje połączone względem czasu, a na podstawie wolumenów wyznaczono średnie ważone.
+
+```{r include=FALSE}
+dane1<-read.table('C:\\Users\\filip\\OneDrive\\Modelowanie Rynkow Finansowych\\Projekt2_Kowalczyk_SassGustkiewicz\\dane1.csv', sep = ';', header = T)
+dane2<-read.table('C:\\Users\\filip\\OneDrive\\Modelowanie Rynkow Finansowych\\Projekt2_Kowalczyk_SassGustkiewicz\\dane2.csv', sep = ';', header = T)
+dane3<-read.table('C:\\Users\\filip\\OneDrive\\Modelowanie Rynkow Finansowych\\Projekt2_Kowalczyk_SassGustkiewicz\\dane3.csv', sep = ';', header = T)
+
+```
+
+
+```{r}
+data <- rbind(dane1, dane2, dane3)
+data$czas <- as.POSIXct(paste(data$data, data$godzina), tz="GMT")
+
+asseco <- subset(data, nazwa=="ASSECOPOL")
+lotos <- subset(data, nazwa=="LOTOS")
+
+asseco <- asseco[order(asseco$czas),]
+lotos <- lotos[order(lotos$czas),]
+
+wolumen_asseco <- aggregate(asseco$wolumen ~ asseco$czas, FUN="sum")
+asseco$wxc <- asseco$wolumen*asseco$cena
+wxc_asseco <- aggregate(asseco$wxc ~asseco$czas, FUN="sum")
+asseco_wazone <- wxc_asseco[2]/wolumen_asseco[2]
+asseco <- asseco %>% distinct(czas, .keep_all = T)
+asseco$wolumen <-  wolumen_asseco[2]
+asseco$cena <-  asseco_wazone
+asseco <- asseco[-c(7)]
+
+wolumen_lotos <- aggregate(lotos$wolumen ~ lotos$czas, FUN="sum")
+lotos$wxc <- lotos$wolumen*lotos$cena
+wxc_lotos <- aggregate(lotos$wxc ~lotos$czas, FUN="sum")
+lotos_wazone <- wxc_lotos[2]/wolumen_lotos[2]
+lotos = lotos %>% distinct(czas, .keep_all = T)
+lotos$wolumen <-  wolumen_lotos[2]
+lotos$cena <-  lotos_wazone
+lotos <- lotos[-c(7)]
+
+asseco$td = 0
+for (i in 2:14893){ #Liczba obs asseco
+  asseco$td[i] = as.numeric(difftime(asseco$czas[i], asseco$czas[i-1], units = "secs"))
+}
+
+lotos$td = 0
+for (i in 2:31645){ #liczba obs lotos
+  lotos$td[i] = as.numeric(difftime(lotos$czas[i], lotos$czas[i-1], units = "secs"))
+}
+
+asseco.2 <- asseco %>% filter(asseco$godzina <= "16:50:00")
+asseco.2 <- asseco.2 %>% filter(asseco.2$godzina >= "09:00:00")
+
+lotos.2 <- lotos %>% filter(lotos$godzina <= "16:50:00")
+lotos.2 <- lotos.2 %>% filter(lotos.2$godzina >= "09:00:00")
+
+asseco.2 <- asseco.2 %>% filter(asseco.2$td < 28800) # 60 x 60 x 8
+lotos.2 <- lotos.2 %>% filter(lotos.2$td < 28800) # 60 x 60 x 8
+
+asseco.2 <- asseco.2[-1,]
+lotos.2 <- lotos.2[-1,]
+```
+
+### Występowanie śróddziennej sezonowości transakcyjnych czasów trwania
+
+W drugiej kolejności zbadano występowanie śróddziennej sezonowości transakcyjnych czasów trwania.Poniższe wykresy prezentują przekrojowe średnie transakcyjne czasy trwania w rozważanym okresie dla firm Asseco i Lotos.
+
+```{r}
+asseco.sr <- asseco.2 %>% mutate(czas = cut(czas, breaks="5 min")) %>% 
+  group_by(czas) %>% summarise(mean.duration = mean(td)) %>% 
+  mutate(godzina = as.numeric(get_time(czas))) %>% group_by(godzina) %>% 
+  summarise(mean.duration = mean(mean.duration)) %>% mutate(godzina = hms.to.char(godzina))
+
+
+lotos.sr <- lotos.2 %>% mutate(czas = cut(czas, breaks="5 min")) %>% 
+  group_by(czas) %>% summarise(mean.duration = mean(td)) %>% 
+  mutate(godzina = as.numeric(get_time(czas))) %>% group_by(godzina) %>% 
+  summarise(mean.duration = mean(mean.duration)) %>% mutate(godzina = hms.to.char(godzina))
+```
+
+
+```{r echo=FALSE}
+asseco.sr %>% 
+  ggplot(aes(x = godzina, y = mean.duration, group = 1)) + ggtitle("Przekrojowe średnie transakcyjne czasy trwania dla Asseco")+xlab("H")+geom_line()+ scale_x_discrete(breaks = factor(c("09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00"))) 
+```
+
+Śróddzienna sezonowość dla Asseco przypomina kształtem zniekształconą oraz wypłaszczoną literę U.  W godzinach porannych średni transakcyjny czas trwania jest nieco krótszy niż popołudniowych, osiągając o 10:05 wartość 100 sekund. Ruch na giełdzie słabnie w południe i wczesnych godzinach popołudniowych, osiągając tam wartości przekraczające 200 sekund. Pod koniec dnia jednakże obserwowana jest jego dzienna wartość minimalna o godzinie gdy o godzinie 16:50 ruch na giełdzie jest najintensywniejszy.
+
+```{r echo=FALSE}
+lotos.sr %>% 
+  ggplot(aes(x = godzina, y = mean.duration, group = 1)) + ggtitle("Przekrojowe średnie transakcyjne czasy trwania dla Grupy Lotos")+xlab("H")+geom_line()+ scale_x_discrete(breaks = factor(c("09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00"))) 
+```
+
+Dla indeksu spółki Lotos w czasie dnia można zaobserwować wydłużenie średniego transakcyjnego czasu trwania w godzinach 13:00 – 14:00. Poza tymi godzinami, gdzie sięga on wartości 165 sekund, ruch na giełdzie jest względnie duży, osiągając swoją wartość maksymalną pod koniec dnia, o godzinie 16:50, na poziomie zaledwie kilku sekund. 
+
+### Usuwanie śróddziennej sezonowości
+
+
+W kolejnym kroku, przy wykorzystania elastycznej formy Fouriera usunięto sezonowość śróddzienną.
+
+# Asseco
+
+```{r}
+asseco.adj <- asseco.2 %>% select(czas, td, godzina)
+colnames(asseco.adj) <- c("time", "durations", "godzina")
+diurAsc <- diurnalAdj(asseco.adj, method = "FFF", aggregation = "weekdays")
+```
+
+Dla wykresów tygodniowych spółki Asseco widoczne jest bardzo duże zróżnicowanie wyników w czwartek, gdzie ok południa następuje znaczne wydłużenie średniego transakcyjnego czasu trwania do aż 100 sekund. W poniedziałki, najwyższy czas trwania wystepuje przed godziną 11:00 co jest najprawdopodobniej efektem zamykania giełdy w weekendy i brakiem ruchu w 2 dni poprzedzające poniedziałek.
+
+```{r echo=FALSE}
+diurAsc.mean <- diurAsc %>% mutate(time = cut(time, breaks="5 min")) %>% 
+  group_by(time) %>% summarise(mean.duration = mean(adjDur)) %>% 
+  mutate(godzina = as.numeric(get_time(time))) %>% group_by(godzina) %>% 
+  summarise(mean.duration = mean(mean.duration)) %>% mutate(godzina = hms.to.char(godzina))
+```
+
+Na poniższym wykresie zaprezentowano uogólnione czasy trwania po usunięciu sezonowości. Co widoczne, wykres jest o wiele bardziej skoncentrowany wogół osi w porównaniu z tym gdzie sesonowość występowała.
+
+```{r echo=FALSE}
+diurAsc.mean %>% 
+  ggplot(aes(x = godzina, y = mean.duration, group = 1)) + ggtitle("Asseco - Przekrojowe śr. transakcyjne czasy trwania bez efektu sezonowości")+xlab("H")+
+  geom_line()+ scale_x_discrete(breaks = factor(c("09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00")))
+```
+
+#### Lotos
+
+```{r}
+lotos.adj <- lotos.2 %>% select(czas, td, godzina)
+colnames(lotos.adj) <- c("time", "durations", "godzina")
+diurLot <- diurnalAdj(lotos.adj, method = "FFF", aggregation = "weekdays")
+```
+
+Powyższy wykres prezentuje zachowanie sie czasów trwania dla spółki Lotos. Istotnym wnioskiem, jest obserwacja opóźnienia maksymalnych wartości średnich czasów trwania w środy, czwartki i piątki w porównaniu z początkiem tygodnia. Największy ruch na giełdzie występuje w czwartki rano, a poniedziałek i piątek są dniami gdzie zachowana jest największe zrównoważenie średnich czasów trwania. Pozostałe dni natomiast charakteryzują się sporymi zmianami od 9 do 16:50.
+
+
+```{r}
+diurLot.mean <- diurLot %>% mutate(time = cut(time, breaks="5 min")) %>% 
+  group_by(time) %>% summarise(mean.duration = mean(adjDur)) %>% 
+  mutate(godzina = as.numeric(get_time(time))) %>% group_by(godzina) %>% 
+  summarise(mean.duration = mean(mean.duration)) %>% mutate(godzina = hms.to.char(godzina))
+```
+
+Całościowy wykres spółki Lotos po usunięciu sezonowości zaprezentowano poniżej.
+
+```{r echo=FALSE}
+diurLot.mean %>% 
+  ggplot(aes(x = godzina, y = mean.duration, group = 1)) + ggtitle("Lotos - przekrojowe śr. transakcyjne czasy trwania bez efektu sezonowości")+xlab("H")+
+  geom_line()+ scale_x_discrete(breaks = factor(c("09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00")))
+```
+
+## Część 2: Cenowe czasy trwania 
+
+```{r}
+# Asseco
+asseco.2$pr.change <- NA
+asseco.3 <- pr.change(asseco.2, 0.05)
+asseco.3 <- pr.change.time(asseco.3)
+
+asseco.3.plt <- asseco.3 %>% mutate(czas = cut(czas, breaks="10 min")) %>% 
+  group_by(czas) %>% summarise(mean.price.change = mean(pr.change)) %>% 
+  mutate(godzina = as.numeric(get_time(czas))) %>% group_by(godzina) %>% 
+  summarise(mean.price.change = mean(mean.price.change)) %>% mutate(godzina = hms.to.char(godzina))
+
+asseco.2$pr.change <- NA
+asseco.3.1 <- pr.change(asseco.2, 0.1)
+asseco.3.1 <- pr.change.time(asseco.3.1)
+
+asseco.3.1.plt <- asseco.3.1 %>% mutate(czas = cut(czas, breaks="10 min")) %>% 
+  group_by(czas) %>% summarise(mean.price.change = mean(pr.change)) %>% 
+  mutate(godzina = as.numeric(get_time(czas))) %>% group_by(godzina) %>% 
+  summarise(mean.price.change = mean(mean.price.change)) %>% mutate(godzina = hms.to.char(godzina))
+
+
+# Lotos
+lotos.2$pr.change <- NA
+lotos.3 <- pr.change(lotos.2, 0.05)
+lotos.3 <- pr.change.time(lotos.3)
+
+lotos.3.plt <- lotos.3 %>% mutate(czas = cut(czas, breaks="10 min")) %>% 
+  group_by(czas) %>% summarise(mean.price.change = mean(pr.change)) %>% 
+  mutate(godzina = as.numeric(get_time(czas))) %>% group_by(godzina) %>% 
+  summarise(mean.price.change = mean(mean.price.change)) %>% mutate(godzina = hms.to.char(godzina))
+
+lotos.2$pr.change <- NA
+lotos.3.1 <- pr.change(lotos.2, 0.1)
+lotos.3.1 <- pr.change.time(lotos.3.1)
+
+lotos.3.1.plt <- lotos.3.1 %>% mutate(czas = cut(czas, breaks="10 min")) %>% 
+  group_by(czas) %>% summarise(mean.price.change = mean(pr.change)) %>% 
+  mutate(godzina = as.numeric(get_time(czas))) %>% group_by(godzina) %>% 
+  summarise(mean.price.change = mean(mean.price.change)) %>% mutate(godzina = hms.to.char(godzina))
+```
+
+
+```{r echo=FALSE, warning=FALSE}
+g1 <- as.data.frame(asseco.3.plt)
+g1$price2<-asseco.3.1.plt$mean.price.change
+
+ggplot(g1, aes(x=godzina))+
+  geom_line(aes(y=mean.price.change, group = 1, color="5 groszy"))+
+  geom_line(aes(y=price2, group = 1, color="10 groszy"))+
+  scale_x_discrete(breaks = factor(c("09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00")))
+```
+Do badań zmian cen spółki Asseco wykorzystano próg cenowy 5 i 10 groszy z interwałem 10 minutowym. Zmiany cen są fundamentalnie wyższe dla progu 10 groszy, jednakże ich wydłużeniom odpowiadają niemal zawsze podwyżki częstotliwości zmian cen progu 5 groszy. Co istotne, poza dwoma momentami w czasie dnia, pomiędzy godzinami 14 i 15, zmieniają się zawsze szybciej o 5 groszy niż o 10. Najczęstsze zmiany cen obserwowane są po godzinie 16, pod koniec dnia, a najrzadsze występują w godzinach 10, 12, 13 i 14.  
+
+```{r echo=FALSE, warning=FALSE}
+g2 <- as.data.frame(lotos.3.plt)
+g2<-merge(g2, lotos.3.1.plt, by="godzina", all.x = TRUE)
+
+ggplot(g2, aes(x=godzina))+
+  geom_line(aes(y=mean.price.change.x, group = 1, color="5 groszy"))+
+  geom_line(aes(y=mean.price.change.y, group = 1, color="10 groszy"))+
+  scale_x_discrete(breaks = factor(c("09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00")))
+```
+
+W przypadku spółki Lotos widoczne są większe różnice pomiędzy częstotliwościami zmian cen dla progów 5 i 10 groszy. Najczęstsze różnice cen pojawiają się na początku i na końcu dnia a ich dynamika znacznie spada w godzinach południowych.
